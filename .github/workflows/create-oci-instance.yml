@@ -3,6 +3,7 @@ name: Create OCI free tier instance
 on:
   workflow_dispatch:
   schedule:
+    # Match the previous action cadence: one attempt every ten minutes.
     - cron: "3/10 * * * *"
 
 permissions:
