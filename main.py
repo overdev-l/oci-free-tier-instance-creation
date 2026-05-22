@@ -198,6 +198,16 @@ def create_instance_details_file_and_notify(instance, shape=ARM_SHAPE):
     arm_body = '\n'.join(details)
     body = arm_body if shape == ARM_SHAPE else micro_body
     write_into_file('INSTANCE_CREATED', body)
+    send_discord_notification(
+        "success",
+        {
+            "lifecycle-state": instance.lifecycle_state,
+            "display-name": instance.display_name,
+            "availability-domain": instance.availability_domain,
+            "shape": instance.shape,
+            "id": instance.id,
+        },
+    )
 
     # Generate HTML body for email
     html_body = generate_html_body(instance)
@@ -225,6 +235,42 @@ def notify_on_failure(failure_msg):
     write_into_file('UNHANDLED_ERROR.log', mail_body)
     if NOTIFY_EMAIL:
         send_email('OCI INSTANCE CREATION SCRIPT: FAILED DUE TO AN ERROR', mail_body, EMAIL, EMAIL_PASSWORD)
+
+
+def send_discord_notification(outcome, log_data):
+    """Send a GitHub Actions-style status notification to Discord."""
+    if not DISCORD_WEBHOOK:
+        return
+
+    if not isinstance(log_data, str):
+        log_data = json.dumps(log_data, indent=2, default=str)
+
+    max_log_chars = 3400
+    if len(log_data) > max_log_chars:
+        log_data = log_data[:max_log_chars] + "\n... truncated ..."
+
+    payload = {
+        "embeds": [
+            {
+                "title": f"OCI VM Status: {outcome}",
+                "description": (
+                    "Attempt to create A1.Flex VM.\n"
+                    f"**Status:** `{outcome}`\n\n"
+                    "**Log Output:**\n"
+                    f"```json\n{log_data}\n```"
+                ),
+                "color": 0x28A745 if outcome == "success" else 0xDC3545,
+            }
+        ]
+    }
+
+    try:
+        response = requests.post(DISCORD_WEBHOOK, json=payload, timeout=15)
+        response.raise_for_status()
+        return response.status_code
+    except requests.RequestException as e:
+        logging.error("Failed to send Discord notification: %s", e)
+        return None
 
 
 def check_instance_state_and_write(compartment_id, shape, states=('RUNNING', 'PROVISIONING'),
@@ -281,11 +327,13 @@ def handle_errors(command, data, log):
         if (data["code"] in ("TooManyRequests", "Out of host capacity.", 'InternalError')) \
                 or (data["message"] in ("Out of host capacity.", "Bad Gateway")):
             log.info("Command: %s--\nOutput: %s", command, data)
+            send_discord_notification("failure", data)
             time.sleep(WAIT_TIME)
             return True
 
     if "status" in data and data["status"] == 502:
         log.info("Command: %s~~\nOutput: %s", command, data)
+        send_discord_notification("failure", data)
         time.sleep(WAIT_TIME)
         return True
     failure_msg = '\n'.join([f'{key}: {value}' for key, value in data.items()])
@@ -356,17 +404,6 @@ def read_or_generate_ssh_public_key(public_key_file: Union[str, Path]):
         ssh_public_key = pub_key_file.read()
 
     return ssh_public_key
-
-
-def send_discord_message(message):
-    """Send a message to Discord using the webhook URL if available."""
-    if DISCORD_WEBHOOK:
-        payload = {"content": message}
-        try:
-            response = requests.post(DISCORD_WEBHOOK, json=payload)
-            response.raise_for_status()
-        except requests.RequestException as e:
-            logging.error("Failed to send Discord message: %s", e)
 
 
 def launch_instance():
@@ -484,11 +521,8 @@ def launch_instance():
 
 
 if __name__ == "__main__":
-    send_discord_message("🚀 OCI Instance Creation Script: Starting up! Let's create some cloud magic!")
     try:
         launch_instance()
-        send_discord_message("🎉 Success! OCI Instance has been created. Time to celebrate!")
     except Exception as e:
-        error_message = f"😱 Oops! Something went wrong with the OCI Instance Creation Script:\n{str(e)}"
-        send_discord_message(error_message)
+        send_discord_notification("failure", {"error": str(e)})
         raise

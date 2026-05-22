@@ -1,0 +1,101 @@
+name: Create OCI free tier instance
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oci-free-tier-instance
+  cancel-in-progress: true
+
+jobs:
+  create-instance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Write OCI configuration
+        env:
+          OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+          OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+          OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+          OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
+          OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+          AD_NAME: ${{ secrets.AD_NAME }}
+          DISPLAY_NAME: ${{ secrets.DISPLAY_NAME }}
+          OCI_COMPUTE_SHAPE: ${{ secrets.OCI_COMPUTE_SHAPE }}
+          SECOND_MICRO_INSTANCE: ${{ secrets.SECOND_MICRO_INSTANCE }}
+          REQUEST_WAIT_TIME_SECS: ${{ secrets.REQUEST_WAIT_TIME_SECS }}
+          SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
+          OCI_SUBNET_ID: ${{ secrets.OCI_SUBNET_ID }}
+          OCI_IMAGE_ID: ${{ secrets.OCI_IMAGE_ID }}
+          OPERATING_SYSTEM: ${{ secrets.OPERATING_SYSTEM }}
+          OS_VERSION: ${{ secrets.OS_VERSION }}
+          ASSIGN_PUBLIC_IP: ${{ secrets.ASSIGN_PUBLIC_IP }}
+          BOOT_VOLUME_SIZE: ${{ secrets.BOOT_VOLUME_SIZE }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+          EMAIL: ${{ secrets.EMAIL }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          set -euo pipefail
+
+          install -m 600 /dev/null oci_api_private_key.pem
+          printf '%s\n' "$OCI_CLI_KEY_CONTENT" > oci_api_private_key.pem
+
+          cat > oci_config <<EOF
+          [DEFAULT]
+          user=$OCI_CLI_USER
+          fingerprint=$OCI_CLI_FINGERPRINT
+          tenancy=$OCI_CLI_TENANCY
+          region=$OCI_CLI_REGION
+          key_file=$GITHUB_WORKSPACE/oci_api_private_key.pem
+          EOF
+
+          printf '%s\n' "$SSH_PUBLIC_KEY" > id_rsa.pub
+
+          cat > oci.env <<EOF
+          OCI_CONFIG=$GITHUB_WORKSPACE/oci_config
+          OCT_FREE_AD=$AD_NAME
+          DISPLAY_NAME=$DISPLAY_NAME
+          OCI_COMPUTE_SHAPE=$OCI_COMPUTE_SHAPE
+          SECOND_MICRO_INSTANCE=$SECOND_MICRO_INSTANCE
+          REQUEST_WAIT_TIME_SECS=$REQUEST_WAIT_TIME_SECS
+          SSH_AUTHORIZED_KEYS_FILE=$GITHUB_WORKSPACE/id_rsa.pub
+          OCI_SUBNET_ID=$OCI_SUBNET_ID
+          OCI_IMAGE_ID=$OCI_IMAGE_ID
+          OPERATING_SYSTEM=$OPERATING_SYSTEM
+          OS_VERSION=$OS_VERSION
+          ASSIGN_PUBLIC_IP=$ASSIGN_PUBLIC_IP
+          BOOT_VOLUME_SIZE=$BOOT_VOLUME_SIZE
+          NOTIFY_EMAIL=$NOTIFY_EMAIL
+          EMAIL=$EMAIL
+          EMAIL_PASSWORD=$EMAIL_PASSWORD
+          DISCORD_WEBHOOK=$DISCORD_WEBHOOK_URL
+          EOF
+
+      - name: Run instance creator
+        run: |
+          set -euo pipefail
+          touch launch_instance.log setup_and_info.log
+          tail -n +1 -F launch_instance.log setup_and_info.log &
+          TAIL_PID=$!
+          trap 'kill "$TAIL_PID"' EXIT
+          python main.py
