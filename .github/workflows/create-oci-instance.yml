@@ -3,7 +3,7 @@ name: Create OCI free tier instance
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */6 * * *"
+    - cron: "3/10 * * * *"
 
 permissions:
   contents: read
@@ -15,7 +15,7 @@ concurrency:
 jobs:
   create-instance:
     runs-on: ubuntu-latest
-    timeout-minutes: 355
+    timeout-minutes: 9
 
     steps:
       - name: Checkout
@@ -80,6 +80,7 @@ jobs:
           SECOND_MICRO_INSTANCE=$SECOND_MICRO_INSTANCE
           REQUEST_WAIT_TIME_SECS=$REQUEST_WAIT_TIME_SECS
           TOO_MANY_REQUESTS_WAIT_TIME_SECS=$TOO_MANY_REQUESTS_WAIT_TIME_SECS
+          MAX_LAUNCH_ATTEMPTS=1
           SSH_AUTHORIZED_KEYS_FILE=$GITHUB_WORKSPACE/id_rsa.pub
           OCI_SUBNET_ID=$OCI_SUBNET_ID
           OCI_IMAGE_ID=$OCI_IMAGE_ID

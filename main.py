@@ -36,6 +36,7 @@ TOO_MANY_REQUESTS_WAIT_TIME = env_int(
     "TOO_MANY_REQUESTS_WAIT_TIME_SECS",
     max(300, WAIT_TIME * 5),
 )
+MAX_LAUNCH_ATTEMPTS = env_int("MAX_LAUNCH_ATTEMPTS", 0)
 SSH_AUTHORIZED_KEYS_FILE = os.getenv("SSH_AUTHORIZED_KEYS_FILE", "").strip()
 OCI_IMAGE_ID = os.getenv("OCI_IMAGE_ID", None).strip() if os.getenv("OCI_IMAGE_ID") else None
 OCI_COMPUTE_SHAPE = os.getenv("OCI_COMPUTE_SHAPE", ARM_SHAPE).strip()
@@ -318,7 +319,7 @@ def check_instance_state_and_write(compartment_id, shape, states=('RUNNING', 'PR
     return False
 
 
-def handle_errors(command, data, log):
+def handle_errors(command, data, log, sleep_before_retry=True):
     """Handles errors and logs messages.
 
     Args:
@@ -337,7 +338,10 @@ def handle_errors(command, data, log):
         else WAIT_TIME
     )
     notification_data = dict(data)
-    notification_data["retry_after_seconds"] = retry_wait_time
+    if sleep_before_retry:
+        notification_data["retry_after_seconds"] = retry_wait_time
+    else:
+        notification_data["next_attempt"] = "next scheduled workflow run"
 
     # Check for temporary errors that can be retried
     if "code" in data:
@@ -345,14 +349,16 @@ def handle_errors(command, data, log):
                 or (data["message"] in ("Out of host capacity.", "Bad Gateway")):
             log.info("Command: %s--\nOutput: %s", command, data)
             send_discord_notification("failure", notification_data)
-            time.sleep(retry_wait_time)
-            return True
+            if sleep_before_retry:
+                time.sleep(retry_wait_time)
+            return sleep_before_retry
 
     if "status" in data and data["status"] == 502:
         log.info("Command: %s~~\nOutput: %s", command, data)
         send_discord_notification("failure", notification_data)
-        time.sleep(retry_wait_time)
-        return True
+        if sleep_before_retry:
+            time.sleep(retry_wait_time)
+        return sleep_before_retry
     failure_msg = '\n'.join([f'{key}: {value}' for key, value in data.items()])
     notify_on_failure(failure_msg)
     # Raise an exception for unexpected errors
@@ -484,7 +490,9 @@ def launch_instance():
     else:
         shape_config = oci.core.models.LaunchInstanceShapeConfigDetails(ocpus=1, memory_in_gbs=1)
 
+    launch_attempts = 0
     while not instance_exist_flag:
+        launch_attempts += 1
         try:
             launch_instance_response = compute_client.launch_instance(
                 launch_instance_details=oci.core.models.LaunchInstanceDetails(
@@ -534,7 +542,17 @@ def launch_instance():
                 "code": srv_err.code,
                 "message": srv_err.message,
             }
-            handle_errors("launch_instance", data, logging_step5)
+            sleep_before_retry = (
+                not MAX_LAUNCH_ATTEMPTS
+                or launch_attempts < MAX_LAUNCH_ATTEMPTS
+            )
+            if not handle_errors(
+                "launch_instance",
+                data,
+                logging_step5,
+                sleep_before_retry=sleep_before_retry,
+            ):
+                break
 
 
 if __name__ == "__main__":
