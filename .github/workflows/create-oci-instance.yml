@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   schedule:
     # Match the previous action cadence: one attempt every ten minutes.
-    - cron: "7/10 * * * *"
+    - cron: "2,12,22,32,42,52 * * * *"
 
 permissions:
   contents: read
