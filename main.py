@@ -23,10 +23,19 @@ ARM_SHAPE = "VM.Standard.A1.Flex"
 E2_MICRO_SHAPE = "VM.Standard.E2.1.Micro"
 
 # Access loaded environment variables and strip white spaces
+def env_int(name, default):
+    value = os.getenv(name, "").strip()
+    return int(value) if value else default
+
+
 OCI_CONFIG = os.getenv("OCI_CONFIG", "").strip()
 OCT_FREE_AD = os.getenv("OCT_FREE_AD", "").strip()
 DISPLAY_NAME = os.getenv("DISPLAY_NAME", "").strip()
-WAIT_TIME = int(os.getenv("REQUEST_WAIT_TIME_SECS", "0").strip())
+WAIT_TIME = env_int("REQUEST_WAIT_TIME_SECS", 0)
+TOO_MANY_REQUESTS_WAIT_TIME = env_int(
+    "TOO_MANY_REQUESTS_WAIT_TIME_SECS",
+    max(300, WAIT_TIME * 5),
+)
 SSH_AUTHORIZED_KEYS_FILE = os.getenv("SSH_AUTHORIZED_KEYS_FILE", "").strip()
 OCI_IMAGE_ID = os.getenv("OCI_IMAGE_ID", None).strip() if os.getenv("OCI_IMAGE_ID") else None
 OCI_COMPUTE_SHAPE = os.getenv("OCI_COMPUTE_SHAPE", ARM_SHAPE).strip()
@@ -322,19 +331,27 @@ def handle_errors(command, data, log):
         Raises Exception for unexpected errors.
     """
 
+    retry_wait_time = (
+        TOO_MANY_REQUESTS_WAIT_TIME
+        if data.get("status") == 429 or data.get("code") == "TooManyRequests"
+        else WAIT_TIME
+    )
+    notification_data = dict(data)
+    notification_data["retry_after_seconds"] = retry_wait_time
+
     # Check for temporary errors that can be retried
     if "code" in data:
         if (data["code"] in ("TooManyRequests", "Out of host capacity.", 'InternalError')) \
                 or (data["message"] in ("Out of host capacity.", "Bad Gateway")):
             log.info("Command: %s--\nOutput: %s", command, data)
-            send_discord_notification("failure", data)
-            time.sleep(WAIT_TIME)
+            send_discord_notification("failure", notification_data)
+            time.sleep(retry_wait_time)
             return True
 
     if "status" in data and data["status"] == 502:
         log.info("Command: %s~~\nOutput: %s", command, data)
-        send_discord_notification("failure", data)
-        time.sleep(WAIT_TIME)
+        send_discord_notification("failure", notification_data)
+        time.sleep(retry_wait_time)
         return True
     failure_msg = '\n'.join([f'{key}: {value}' for key, value in data.items()])
     notify_on_failure(failure_msg)
